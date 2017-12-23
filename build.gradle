@@ -1,0 +1,101 @@
+apply plugin: 'groovy'
+apply plugin: 'application'
+apply plugin: 'maven'
+apply plugin: 'maven-publish'
+
+String nexusUrl = 'http://localhost:8081/nexus3'
+String targetDir = 'target'
+
+def repoList = [
+    beta: [
+        from: 'repository/sponge-alpha/',
+        target: 'repository/sponge-beta/'
+    ],
+    gamma: [
+        from: 'repository/sponge-beta/',
+        target: 'repository/sponge-gamma/'
+    ],
+    delta: [
+        from: 'repository/sponge-gamma/',
+        target: 'repository/sponge-delta/'
+    ],
+    epsilon: [
+        from: 'repository/sponge-delta/',
+        target: 'repository/sponge-epsilon/'
+    ]
+]
+
+def targetEnvironment, pomFile
+if (project.hasProperty('targetEnvironment') && project.hasProperty('pomFile')){
+        targetEnvironment = project.properties.targetEnvironment
+        pomFile = project.properties.pomFile
+} else {
+    print('''
+        Usage:
+            gradlew publish [--info]
+            -P targetEnvironment=<targetEnviroment>
+            -P pomFile=<pathToPomFile>
+        ''')
+    throw new InvalidUserDataException("Missing arguments.")
+}
+
+
+println 'Variables Map:'
+def map =[
+    'targetEnvironment: ':targetEnvironment,
+    'to: ':pomFile
+]
+map.each{
+    k,v -> println "* " + "${k}${v}"
+}
+println ""
+
+
+def pomData = new XmlSlurper().parse(pomFile)
+println "Artifact dependency from pomfile is ${pomData.groupId}:${pomData.artifactId}:${pomData.version}"
+
+// Specify source repository to download through Apache Maven.
+repositories {
+    maven {
+        url "${nexusUrl}/${repoList.get(targetEnvironment).from}"
+    }
+}
+
+// Ensure that we have the artifact downloaded from the source repository.
+dependencies{
+    compile "${pomData.groupId}:${pomData.artifactId}:${pomData.version}"
+}
+
+task copyDependencies(type: Copy) {
+   from configurations.compile
+   into targetDir
+}
+
+def someFile = file("${targetDir}/${pomData.artifactId}-${pomData.version}.jar")
+artifacts {
+    archives someFile
+}
+
+// Specify target repository to upload through Apache Nexus.
+publishing.repositories {
+    maven {
+        url "${nexusUrl}/${repoList.get(targetEnvironment).target}"
+        credentials {
+            username "$mavenUser"
+            password "$mavenPassword"
+        }
+    }
+}
+
+// Gradle-specific code to ensure this whole shebang works as intended.
+publishing.publications {
+    mavenJava(MavenPublication) {
+        groupId "${pomData.groupId}"
+        artifactId "${pomData.artifactId}"
+        version "${pomData.version}"
+
+        artifact(someFile) {
+            builtBy copyDependencies
+        }
+    }
+}
